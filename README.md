@@ -54,16 +54,3 @@ This project presents an intelligent system for optimizing task scheduling in cl
 - **Response Time**: Up to 20% improvement
 - **Energy Cost**: Significant cost reduction
 
-## Project Structure
-```
-├── src/
-│   ├── QLO.java                    # Main algorithm implementation
-│   ├── PowerModelSpecPower_QLO.java # Custom energy model
-│   └── tests/                      # Unit tests
-├── lib/                            # CloudSim dependencies
-├── docs/                           # Documentation
-├── results/                        # Performance results
-├── config/                         # Configuration files
-├── scripts/                        # Automation scripts
-└── data/                          # Sample datasets
-```
