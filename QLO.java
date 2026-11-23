@@ -1,694 +1,648 @@
 /*
- * Title:        CloudSim Toolkit
- * Description:  CloudSim (Cloud Simulation) Toolkit for Modeling and Simulation
- *               of Clouds
- * Licence:      GPL - http://www.gnu.org/copyleft/gpl.html
- *
- * Copyright (c) 2009, The University of Melbourne, Australia
+ * Q-Learning Optimizer (QLO) for Energy-Aware Cloud Task Scheduling
+ * Master's Thesis Implementation — Islamic Azad University, Science and Research Branch (2025)
+ * Built on the CloudSim 3.0 Simulation Toolkit
  */
 
- import java.util.stream.*;
- import java.text.DecimalFormat;
- import java.util.Random;
- 
- import java.text.DecimalFormat;
- import java.util.ArrayList;
- import java.util.Arrays;
- import java.util.Calendar;
- import java.util.LinkedList;
- import java.util.List;
- import java.util.Random;
- 
- import org.cloudbus.cloudsim.Cloudlet;
- import org.cloudbus.cloudsim.CloudletSchedulerTimeShared;
- import org.cloudbus.cloudsim.CloudletSchedulerSpaceShared;
- import org.cloudbus.cloudsim.Datacenter;
- import org.cloudbus.cloudsim.DatacenterBroker;
- import org.cloudbus.cloudsim.DatacenterCharacteristics;
- import org.cloudbus.cloudsim.Host;
- import org.cloudbus.cloudsim.Log;
- import org.cloudbus.cloudsim.Pe;
- import org.cloudbus.cloudsim.Storage;
- import org.cloudbus.cloudsim.UtilizationModel;
- import org.cloudbus.cloudsim.UtilizationModelFull;
- import org.cloudbus.cloudsim.Vm;
- import org.cloudbus.cloudsim.power.PowerVm;
- import org.cloudbus.cloudsim.VmAllocationPolicySimple;
- import org.cloudbus.cloudsim.VmSchedulerTimeShared;
- import org.cloudbus.cloudsim.core.CloudSim;
- import org.cloudbus.cloudsim.power.PowerHost;
- import org.cloudbus.cloudsim.power.models.PowerModelSpecPower_QLO;
- import org.cloudbus.cloudsim.provisioners.BwProvisionerSimple;
- import org.cloudbus.cloudsim.provisioners.PeProvisionerSimple;
- import org.cloudbus.cloudsim.provisioners.RamProvisionerSimple;
- 
- /**
-  * A simple example showing how to create
-  * a datacenter with one host and run two
-  * cloudlets on it. The cloudlets run in
-  * VMs with the same MIPS requirements.
-  * The cloudlets will take the same time to
-  * complete the execution.
-  */
- public class QLO {
- 
-     /** The cloudlet list. */
-     private static List<Cloudlet> cloudletList0;
-     private static List<Cloudlet> cloudletList1;
- 
-     /** The vmlist. */
-     private static List<Vm> vmlist0;
-     private static List<Vm> vmlist1;
- 
-     final static int vmcount = 4;
-     final static int vmmips[] = { 100, 300, 500, 700 };
- 
-     final static int taskcount = 10;
-     final static int tasktype = 2;
-     final static Integer tasktypelist[] = { 115, 345 };
- 
-     // Q-Learning parameters
-     final static int states = vmcount;
-     final static double alpha = 0.1; // Learning rate
-     final static double gamma = 0.9; // Discount factor
-     final static double epsilon = 0.1; // Exploration rate
-     final static double[][] Q = new double[states * tasktype][states]; // Q learning table
- 
-     // Energy cost per kWh ($0.15)
-     final static double energyCostPerKWh = 0.15;
- 
-     // Performance metrics storage
-     private static double optimizedExecutionTime;
-     private static double nonOptimizedExecutionTime;
-     private static double optimizedResponseTime;
-     private static double nonOptimizedResponseTime;
-     private static double optimizedEnergyCost;
-     private static double nonOptimizedEnergyCost;
-     private static double optimizedEnergyConsumption;
-     private static double nonOptimizedEnergyConsumption;
- 
-     /**
-      * Creates main() to run this example
-      */
-     public static void main(String[] args) {
-         Log.printLine("Starting QLO ...");
- 
-         // Model Training Episode
-         // =============================================================================================
-         Random rand = new Random();
-         int mipssum = IntStream.of(vmmips).sum();
-         long[] vmqoplen = new long[vmcount]; // VM queue optimum length of task in load balancing
-         long[] vmcurqlen = new long[vmcount]; // VM queue current length of task in load balancing
-         long[] vmqlvar = new long[vmcount]; // VM queue task variance
-         long[] vmqlabsvar = new long[vmcount]; // VM queue task absolute variance
-         long cursumvmqlabsvar = 0; // Current total VM queue task absolute variance
-         long prevsumvmqlabsvar = 0; // Previous total VM queue task absolute variance
- 
-         // Model Training main loop
-         for (int i = 0; i < 1000; i++) {
-             int vq = 0;
-             int k = 0;
-             int tasksum = 0;
-             int[][] vmq = new int[vmcount][taskcount]; // Vm's task queue table
- 
-             for (int j = 0; j < taskcount; j++) {
-                 int jobtype = rand.nextInt(tasktype); // Create task randomly
-                 tasksum = tasksum + tasktypelist[jobtype]; // Calc total created task in every pass
-                 // Task Round Robin scheduling in VM's queue
-                 vmq[vq][k] = tasktypelist[jobtype];
-                 vq = vq + 1;
-                 if (vq == vmcount) {
-                     vq = 0;
-                     k = k + 1;
-                 }
-             }
- 
-             double lbco = (double) tasksum / mipssum; // Calc Load Balancing Coefficient
- 
-             // Calc VM queue optimum length of task in load balancing
-             for (int j = 0; j < vmcount; j++) {
-                 vmqoplen[j] = Math.round(lbco * vmmips[j]);
-             }
- 
-             // Calc VM queue current length of task in load balancing
-             // Calc VM queue task variance
-             // Calc VM queue task absolute variance
-             // Calc Current total VM queue task absolute variance
-             cursumvmqlabsvar = 0;
-             for (int j = 0; j < vmcount; j++) {
-                 vmcurqlen[j] = IntStream.of(vmq[j]).sum();
-                 vmqlvar[j] = vmqoplen[j] - vmcurqlen[j];
-                 vmqlabsvar[j] = Math.abs(vmqlvar[j]);
-                 cursumvmqlabsvar = cursumvmqlabsvar + vmqlabsvar[j];
-             }
- 
-             // Choose start state randomly. The VM queue must not be empty
-             int state = rand.nextInt(states);
-             while (IntStream.of(vmq[state]).sum() == 0) {
-                 state = rand.nextInt(states);
-             }
-             int nextstate = state; // At first current state and next state are the same
- 
-             for (int learn = 0; learn < 1000; learn++) {
-                 prevsumvmqlabsvar = cursumvmqlabsvar;
- 
-                 // Choose a job to relocation from current queue(state) randomly
-                 int nonzerojobs = 0;
-                 int[] jobidx = new int[taskcount];
-                 for (int idx = 0; idx < vmq[state].length; idx++) {
-                     if (vmq[state][idx] != 0) {
-                         nonzerojobs++;
-                         jobidx[nonzerojobs - 1] = idx;
-                     }
-                 }
- 
-                 int choosedjobidx = rand.nextInt(nonzerojobs);
-                 int choosedjob = vmq[state][jobidx[choosedjobidx]];
-                 vmq[state][jobidx[choosedjobidx]] = 0;
- 
-                 while (state == nextstate) {
-                     nextstate = rand.nextInt(states);
-                 }
- 
-                 for (int idx = 0; idx < vmq[nextstate].length; idx++) {
-                     if (vmq[nextstate][idx] == 0) {
-                         vmq[nextstate][idx] = choosedjob;
-                         break;
-                     }
-                 }
- 
-                 // Calc current total VM queue task absolute variance
-                 cursumvmqlabsvar = 0;
-                 for (int j = 0; j < vmcount; j++) {
-                     vmcurqlen[j] = IntStream.of(vmq[j]).sum();
-                     vmqlvar[j] = vmqoplen[j] - vmcurqlen[j];
-                     vmqlabsvar[j] = Math.abs(vmqlvar[j]);
-                     cursumvmqlabsvar = cursumvmqlabsvar + vmqlabsvar[j];
-                 }
- 
-                 long r = prevsumvmqlabsvar - cursumvmqlabsvar; // Get action Reward
- 
-                 double q = getQ(state, Arrays.asList(tasktypelist).indexOf(choosedjob), nextstate); // Get current Q table value for state & action
- 
-                 double maxQ = getMaxQ(nextstate, Arrays.asList(tasktypelist).indexOf(choosedjob)); // Get Max-Q value for next state
- 
-                 double value = q + alpha * (r + gamma * maxQ - q); // Calc action value
- 
-                 setQ(state, Arrays.asList(tasktypelist).indexOf(choosedjob), nextstate, value); // Insert action value in Q table
- 
-                 state = nextstate; // Change state to next state
-             }
-         }
-         Log.printLine("End of Training Episode...");
-         // End of Training Episode
-         // ==============================================================================================
- 
-         // Model Test Episode
-         try {
-             // Generate tasks for test randomly
-             int vq = 0;
-             int k = 0;
-             int tasksum = 0;
-             int[][] vmq = new int[vmcount][taskcount]; // Vm's task queue table
-             int[][] noOpVmQ = new int[vmcount][taskcount]; // Vm's task queue table
- 
-             for (int j = 0; j < taskcount; j++) {
-                 int jobtype = rand.nextInt(tasktype); // Create task randomly
-                 tasksum = tasksum + tasktypelist[jobtype]; // Calc total created task in every pass
-                 // Task Round Robin scheduling in VM's queue
-                 vmq[vq][k] = tasktypelist[jobtype];
-                 noOpVmQ[vq][k] = tasktypelist[jobtype];
-                 vq = vq + 1;
-                 if (vq == vmcount) {
-                     vq = 0;
-                     k = k + 1;
-                 }
-             }
- 
-             double lbco = (double) tasksum / mipssum; // Calc Load Balancing Coefficient
- 
-             // Calc VM queue optimum length of task in load balancing
-             for (int j = 0; j < vmcount; j++) {
-                 vmqoplen[j] = Math.round(lbco * vmmips[j]);
-             }
- 
-             // Calc VM queue current length of task in load balancing
-             // Calc VM queue task variance
-             // Calc VM queue task absolute variance
-             // Calc Current total VM queue task absolute variance
-             cursumvmqlabsvar = 0;
-             for (int j = 0; j < vmcount; j++) {
-                 vmcurqlen[j] = IntStream.of(vmq[j]).sum();
-                 vmqlvar[j] = vmqoplen[j] - vmcurqlen[j];
-                 vmqlabsvar[j] = Math.abs(vmqlvar[j]);
-                 cursumvmqlabsvar = cursumvmqlabsvar + vmqlabsvar[j];
-             }
-             prevsumvmqlabsvar = cursumvmqlabsvar;
- 
-             // Schedule jobs on VMs with Q-table using
-             for (int state = 0; state < states; state++) {
-                 for (int tt = 0; tt < tasktype; tt++) {
-                     double[] qline = Q[(state * tasktype) + tt]; // Trace Q-table in row mode
-                     // Determine Q-table current row max value index
-                     while (DoubleStream.of(qline).sum() != 0) {
-                         double maxValue = -Double.MAX_VALUE;
-                         int maxValueIdx = 0;
-                         for (int qlidx = 0; qlidx < states; qlidx++) {
-                             if (maxValue < qline[qlidx] && qline[qlidx] != 0) {
-                                 maxValue = qline[qlidx];
-                                 maxValueIdx = qlidx;
-                             }
-                         }
-                         qline[maxValueIdx] = 0;
- 
-                         for (int l = 0; l < vmq[state].length; l++) {
-                             if (vmq[state][l] == tasktypelist[tt]) {
-                                 int choosedjob = vmq[state][l];
-                                 long sourceVmQlAbsvar = Math.abs(vmqoplen[state] - (vmcurqlen[state] - choosedjob));
-                                 long destVmQlAbsvar = Math.abs(vmqoplen[maxValueIdx] - (vmcurqlen[maxValueIdx] + choosedjob));
-                                 long newSumVmQlAbsVar = cursumvmqlabsvar - vmqlabsvar[state] + sourceVmQlAbsvar
-                                         - vmqlabsvar[maxValueIdx] + destVmQlAbsvar;
-                                 if (newSumVmQlAbsVar < cursumvmqlabsvar) {
-                                     vmcurqlen[state] = vmcurqlen[state] - choosedjob;
-                                     vmcurqlen[maxValueIdx] = vmcurqlen[maxValueIdx] + choosedjob;
-                                     vmqlabsvar[state] = sourceVmQlAbsvar;
-                                     vmqlabsvar[maxValueIdx] = destVmQlAbsvar;
-                                     cursumvmqlabsvar = newSumVmQlAbsVar;
-                                     vmq[state][l] = 0;
-                                     for (int idx = 0; idx < vmq[maxValueIdx].length; idx++) {
-                                         if (vmq[maxValueIdx][idx] == 0) {
-                                             vmq[maxValueIdx][idx] = choosedjob;
-                                             break;
-                                         }
-                                     }
-                                 }
-                             }
-                         }
-                     }
-                 }
-             }
- 
-             // Create VMs and Tasks in Cloud and assign Tasks to VMs same optimized VM's queue
-             // First step: Initialize the CloudSim package. It should be called
-             // before creating any entities.
-             int num_user = 2; // number of cloud users
-             Calendar calendar = Calendar.getInstance();
-             boolean trace_flag = false; // mean trace events
- 
-             // Initialize the CloudSim library
-             CloudSim.init(num_user, calendar, trace_flag);
- 
-             // Second step: Create Datacenters
-             // Datacenters are the resource providers in CloudSim. We need at list one of them to run a CloudSim simulation
-             @SuppressWarnings("unused")
-             Datacenter datacenter0 = createDatacenter("Datacenter_0");
-             Host host0 = datacenter0.getHostList().get(0);
-             Host host1 = datacenter0.getHostList().get(1);
- 
-             // Third step: Create Broker
-             DatacenterBroker broker0 = createBroker(0);
-             int brokerId0 = broker0.getId();
- 
-             DatacenterBroker broker1 = createBroker(1);
-             int brokerId1 = broker1.getId();
- 
-             // Fourth step: Create virtual machines
-             vmlist0 = new ArrayList<Vm>();
-             vmlist1 = new ArrayList<Vm>();
-             // Vm fqvm1,;
-             int vmid;
-             int mips = 0;
-             long size = 10000; // image size (MB)
-             int ram = 512; // vm memory (MB)
-             long bw = 1000;
-             int pesNumber = 1; // number of cpus
-             String vmm = "Xen"; // VMM name
- 
-             for (int i = 0; i < vmcount; i++) {
-                 // VM description VM
-                 vmid = i;
-                 mips = vmmips[i];
-                 // create VM
-                 Vm fqvm0 = new Vm(vmid, brokerId0, mips, pesNumber, ram, bw, size, vmm, new CloudletSchedulerSpaceShared());
-                 fqvm0.setHost(host0);
-                 vmlist0.add(fqvm0);
- 
-                 Vm fqvm1 = new Vm(vmid, brokerId1, mips, pesNumber, ram, bw, size, vmm, new CloudletSchedulerSpaceShared());
-                 fqvm1.setHost(host1);
-                 vmlist1.add(fqvm1);
-             }
-             // submit vm list to the broker
-             broker0.submitVmList(vmlist0);
-             broker1.submitVmList(vmlist1);
- 
-             // Fifth step: Create Cloudlets
-             cloudletList0 = new ArrayList<Cloudlet>();
-             cloudletList1 = new ArrayList<Cloudlet>();
- 
-             // Cloudlet properties
-             pesNumber = 1;
-             long fileSize = 3000;
-             long outputSize = 3000;
-             UtilizationModel utilizationModel = new UtilizationModelFull();
-             int cloudletid0 = 0;
-             int cloudletid1 = 1000;
-             int[][] binder0 = new int[vmcount][taskcount]; // Vm to Task bind table
-             int[][] binder1 = new int[vmcount][taskcount]; // Vm to Task bind table
-             for (int i = 0; i < vmcount; i++) {
-                 for (int j = 0; j < taskcount; j++) {
-                     if (vmq[i][j] > 0) {
-                         // if (noOpVmQ[i][j] > 0){
-                         long length = vmq[i][j];
-                         Cloudlet cloudlet = new Cloudlet(cloudletid0, length, pesNumber, fileSize, outputSize, utilizationModel, utilizationModel, utilizationModel);
-                         cloudlet.setUserId(brokerId0);
-                         cloudletList0.add(cloudlet);
-                         binder0[i][j] = cloudletid0;
-                         cloudletid0++;
-                     } else {
-                         binder0[i][j] = -1;
-                     }
-                     if (noOpVmQ[i][j] > 0) {
-                         long length = noOpVmQ[i][j];
-                         Cloudlet cloudlet = new Cloudlet(cloudletid1, length, pesNumber, fileSize, outputSize, utilizationModel, utilizationModel, utilizationModel);
-                         cloudlet.setUserId(brokerId1);
-                         cloudletList1.add(cloudlet);
-                         binder1[i][j] = cloudletid1;
-                         cloudletid1++;
-                     } else {
-                         binder1[i][j] = -1;
-                     }
- 
-                 }
-             }
- 
-             // submit cloudlet list to the broker
-             broker0.submitCloudletList(cloudletList0);
-             broker1.submitCloudletList(cloudletList1);
-             // bind the cloudlets to the vms. This way, the broker
-             // will submit the bound cloudlets only to the specific VM
-             for (int i = 0; i < vmcount; i++) {
-                 for (int j = 0; j < taskcount; j++) {
-                     if (binder0[i][j] > -1) {
-                         broker0.bindCloudletToVm(binder0[i][j], vmlist0.get(i).getId());
-                     }
-                     if (binder1[i][j] > -1) {
-                         broker1.bindCloudletToVm(binder1[i][j], vmlist1.get(i).getId());
-                     }
- 
-                 }
-             }
- 
-             // Sixth step: Starts the simulation
-             Log.printLine("QLO Optimized started!");
-             CloudSim.startSimulation();
- 
-             // Final step: Print results when simulation is over
-             List<Cloudlet> cloudletList0 = broker0.getCloudletReceivedList();
-             List<Cloudlet> cloudletList1 = broker1.getCloudletReceivedList();
-             List<PowerHost> powerhosts = datacenter0.getHostList();
- 
-             CloudSim.stopSimulation();
-             Log.printLine("=============================================================================");
-             Log.printLine("=============> User (Optimized) " + brokerId0 + "    ");
-             printCloudletList(cloudletList0, powerhosts.get(0), true);
- 
-             Log.printLine("=============================================================================");
-             Log.printLine("=============> User (No Optimized)" + brokerId1 + "    ");
-             printCloudletList(cloudletList1, powerhosts.get(1), false);
- 
-             Log.printLine("QLO Optimized finished!");
- 
-             // Print improvement results
-             printImprovementResults();
- 
-         } catch (Exception e) {
-             e.printStackTrace();
-             Log.printLine("The simulation has been terminated due to an unexpected error");
-         }
-     }
- 
-     private static Datacenter createDatacenter(String name) {
- 
-         // Here are the steps needed to create a PowerDatacenter:
-         // 1. We need to create a list to store
-         // our machine
-         List<Host> hostList = new ArrayList<Host>();
- 
-         // 2. A Machine contains one or more PEs or CPUs/Cores.
-         // In this example, it will have only one core.
-         List<Pe> peList = new ArrayList<Pe>();
- 
-         int mips = 5000;
- 
-         // 3. Create PEs and add these into a list.
-         peList.add(new Pe(0, new PeProvisionerSimple(mips))); // need to store Pe id and MIPS Rating
- 
-         // 4. Create Host with its id and list of PEs and add them to the list of machines
-         int hostId = 0;
-         int ram = 20480; // host memory (MB)
-         long storage = 1000000; // host storage
-         int bw = 100000;
- 
-         hostList.add(
-                 new PowerHost(
-                         hostId,
-                         new RamProvisionerSimple(ram),
-                         new BwProvisionerSimple(bw),
-                         storage,
-                         peList,
-                         new VmSchedulerTimeShared(peList),
-                         new PowerModelSpecPower_QLO())
-         ); // This is our machine
- 
-         hostId = 1;
-         hostList.add(
-                 new PowerHost(
-                         hostId,
-                         new RamProvisionerSimple(ram),
-                         new BwProvisionerSimple(bw),
-                         storage,
-                         peList,
-                         new VmSchedulerTimeShared(peList),
-                         new PowerModelSpecPower_QLO())
-         ); // This is our machine
- 
-         // 5. Create a DatacenterCharacteristics object that stores the
-         // properties of a data center: architecture, OS, list of
-         // Machines, allocation policy: time- or space-shared, time zone
-         // and its price (G$/Pe time unit).
-         String arch = "x86"; // system architecture
-         String os = "Linux"; // operating system
-         String vmm = "Xen";
-         double time_zone = 10.0; // time zone this resource located
-         double cost = 3.0; // the cost of using processing in this resource
-         double costPerMem = 0.05; // the cost of using memory in this resource
-         double costPerStorage = 0.001; // the cost of using storage in this resource
-         double costPerBw = 0.0; // the cost of using bw in this resource
-         LinkedList<Storage> storageList = new LinkedList<Storage>(); // we are not adding SAN devices by now
- 
-         DatacenterCharacteristics characteristics = new DatacenterCharacteristics(
-                 arch, os, vmm, hostList, time_zone, cost, costPerMem, costPerStorage, costPerBw);
- 
-         // 6. Finally, we need to create a PowerDatacenter object.
-         Datacenter datacenter = null;
-         try {
-             datacenter = new Datacenter(name, characteristics, new VmAllocationPolicySimple(hostList), storageList, 0);
-         } catch (Exception e) {
-             e.printStackTrace();
-         }
- 
-         return datacenter;
-     }
- 
-     // We strongly encourage users to develop their own broker policies, to submit vms and cloudlets according
-     // to the specific rules of the simulated scenario
-     private static DatacenterBroker createBroker(int id) {
- 
-         DatacenterBroker broker = null;
-         try {
-             broker = new DatacenterBroker("Broker" + id);
-         } catch (Exception e) {
-             e.printStackTrace();
-             return null;
-         }
-         return broker;
-     }
- 
-     /**
-      * Prints the Cloudlet objects
-      * 
-      * @param list list of Cloudlets
-      */
-     private static void printCloudletList(List<Cloudlet> list, PowerHost host, boolean isOptimized) {
-         int size = list.size();
-         Cloudlet cloudlet;
- 
-         String indent = "    ";
-         Log.printLine();
-         Log.printLine("========== OUTPUT ==========");
-         Log.printLine("Cloudlet ID" + indent + "STATUS" + indent +
-                 "Data center ID" + indent + "VM ID" + indent + "Time" + indent +
-                 "Start Time" + indent + "Finish Time" + indent + "Cost" + indent + "Response Time");
- 
-         DecimalFormat dft = new DecimalFormat("###.##");
-         double maxFinishTime = 0;
-         double totalCost = 0;
-         double totalResponseTime = 0;
- 
-         for (int i = 0; i < size; i++) {
-             cloudlet = list.get(i);
-             Log.print(indent + cloudlet.getCloudletId() + indent + indent);
- 
-             if (cloudlet.getCloudletStatus() == Cloudlet.SUCCESS) {
-                 Log.print("SUCCESS");
- 
-                 // Calculate cost
-                 double costPerSecond = 0.01; // Cost of using CPU per second
-                 double costPerRam = 0.001; // Cost of using RAM per MB
-                 double costPerBw = 0.0001; // Cost of using bandwidth per MB
-                 double cost = (cloudlet.getActualCPUTime() * costPerSecond) +
-                         (cloudlet.getUtilizationOfRam(cloudlet.getActualCPUTime()) * (costPerRam * cloudlet.getCloudletLength())) +
-                         (cloudlet.getUtilizationOfBw(cloudlet.getCloudletLength() / 1000) * costPerBw);
- 
-                 // Calculate response time
-                 double responseTime = cloudlet.getFinishTime() - cloudlet.getExecStartTime();
- 
-                 // Update total cost and response time
-                 totalCost += cost;
-                 totalResponseTime += responseTime;
- 
-                 // Print the cloudlet details in table format
-                 Log.printLine(indent + indent + cloudlet.getResourceId() + indent + indent + indent + cloudlet.getVmId() +
-                         indent + indent + dft.format(cloudlet.getActualCPUTime()) + indent + indent +
-                         dft.format(cloudlet.getExecStartTime()) + indent + indent + dft.format(cloudlet.getFinishTime()) +
-                         indent + indent + dft.format(cost) + indent + indent + dft.format(responseTime));
- 
-                 // Update maxFinishTime
-                 if (cloudlet.getFinishTime() > maxFinishTime) {
-                     maxFinishTime = cloudlet.getFinishTime();
-                 }
-             }
-         }
- 
-         // Calculate host energy consumption
-         int timeLength = (int) Math.round(maxFinishTime * 100);
-         double[][] timeTable = new double[vmcount][timeLength];
-         for (Cloudlet cl : list) {
-             for (int i = (int) Math.round(cl.getExecStartTime() * 100); i < (int) Math.round(cl.getFinishTime() * 100); i++) {
-                 timeTable[cl.getVmId()][i] = vmmips[cl.getVmId()];
-             }
-         }
- 
-         double hostPower = 0; // Host power consumption in kWh
-         for (int j = 0; j < timeLength; j++) {
-             double utilsum = 0;
-             for (int i = 0; i < vmcount; i++) {
-                 utilsum += timeTable[i][j];
-             }
-             double hostUtilPart = host.getPowerModel().getPower(utilsum / IntStream.of(vmmips).sum());
-             hostPower += hostUtilPart;
-         }
- 
-         // Calculate energy cost
-         double hostEnergyCost = hostPower * energyCostPerKWh; // Host energy cost
- 
-         Log.printLine("=============================================================");
-         Log.printLine("Host " + host.getId() + " Energy Consumption: " + hostPower + " kWh");
-         Log.printLine("Host " + host.getId() + " Energy Cost: $" + hostEnergyCost); // نمایش هزینه انرژی
-         Log.printLine("=============================================================");
- 
-         // Save values for percentage improvement calculation
-         if (isOptimized) {
-             optimizedExecutionTime = maxFinishTime;
-             optimizedResponseTime = totalResponseTime / size;
-             optimizedEnergyCost = hostEnergyCost;
-             optimizedEnergyConsumption = hostPower;
-         } else {
-             nonOptimizedExecutionTime = maxFinishTime;
-             nonOptimizedResponseTime = totalResponseTime / size;
-             nonOptimizedEnergyCost = hostEnergyCost;
-             nonOptimizedEnergyConsumption = hostPower;
-         }
-     }
- 
-     /**
-      * Get Max Q
-      * 
-      * @param list state
-      */
-     private static double getMaxQ(int state, int job) {
- 
-         double maxValue = Double.NEGATIVE_INFINITY;
- 
-         for (int i = 0; i < vmcount; i++) {
- 
-             if (maxValue < Q[(state * tasktype) + job][i]) {
- 
-                 maxValue = Q[(state * tasktype) + job][i];
- 
-             }
-         }
-         return maxValue;
- 
-         // return Arrays.stream(Q[(state * tasktype) + job]).max().getAsDouble();
- 
-     }
- 
-     /**
-      * Get Q table value
-      * 
-      * @param list state, action
-      */
- 
-     private static double getQ(int state, int job, int netxstate) {
- 
-         return Q[(state * tasktype) + job][netxstate];
- 
-     }
- 
-     /**
-      * Set Q table value
-      * 
-      * @param list state, action, value
-      */
-     private static void setQ(int state, int job, int netxstate, double value) {
- 
-         Q[(state * tasktype) + job][netxstate] = value;
- 
-     }
- 
-     /**
-      * Print improvement results
-      */
-     private static void printImprovementResults() {
-         DecimalFormat dft = new DecimalFormat("###.##");
- 
-         // Calculate the percentage of execution time improvement
-         double executionTimeImprovement = ((nonOptimizedExecutionTime - optimizedExecutionTime) / nonOptimizedExecutionTime) * 100;
- 
-         // Calculate the percentage of response time improvement
-         double responseTimeImprovement = ((nonOptimizedResponseTime - optimizedResponseTime) / nonOptimizedResponseTime) * 100;
- 
-         // Calculate the percentage of energy consumption improvement
-         double energyImprovement = ((nonOptimizedEnergyConsumption - optimizedEnergyConsumption) / nonOptimizedEnergyConsumption) * 100;
- 
-         // Calculate the percentage of energy cost improvement
-         double energyCostImprovement = ((nonOptimizedEnergyCost - optimizedEnergyCost) / nonOptimizedEnergyCost) * 100;
- 
-         Log.printLine("=============================================================");
-         Log.printLine("Improvement Results:");
-         Log.printLine("Execution Time (Optimized): " + dft.format(optimizedExecutionTime));
-         Log.printLine("Execution Time (Non-Optimized): " + dft.format(nonOptimizedExecutionTime));
-         Log.printLine("Execution Time Improvement: " + dft.format(executionTimeImprovement) + "%");
-         Log.printLine("Average Response Time (Optimized): " + dft.format(optimizedResponseTime));
-         Log.printLine("Average Response Time (Non-Optimized): " + dft.format(nonOptimizedResponseTime));
-         Log.printLine("Response Time Improvement: " + dft.format(responseTimeImprovement) + "%");
-         Log.printLine("Energy Cost (Optimized): $" + dft.format(optimizedEnergyCost));
-         Log.printLine("Energy Cost (Non-Optimized): $" + dft.format(nonOptimizedEnergyCost));
-         Log.printLine("Energy Cost Improvement: " + dft.format(energyCostImprovement) + "%");
-         Log.printLine("Energy Consumption (Optimized): " + dft.format(optimizedEnergyConsumption) + " kWh");
-         Log.printLine("Energy Consumption (Non-Optimized): " + dft.format(nonOptimizedEnergyConsumption) + " kWh");
-         Log.printLine("Energy Improvement: " + dft.format(energyImprovement) + "%");
-         Log.printLine("=============================================================");
-     }
- }
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Calendar;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Random;
+import java.util.stream.IntStream;
+
+import org.cloudbus.cloudsim.Cloudlet;
+import org.cloudbus.cloudsim.CloudletSchedulerSpaceShared;
+import org.cloudbus.cloudsim.Datacenter;
+import org.cloudbus.cloudsim.DatacenterBroker;
+import org.cloudbus.cloudsim.DatacenterCharacteristics;
+import org.cloudbus.cloudsim.Host;
+import org.cloudbus.cloudsim.Log;
+import org.cloudbus.cloudsim.Pe;
+import org.cloudbus.cloudsim.Storage;
+import org.cloudbus.cloudsim.UtilizationModel;
+import org.cloudbus.cloudsim.UtilizationModelFull;
+import org.cloudbus.cloudsim.Vm;
+import org.cloudbus.cloudsim.VmAllocationPolicySimple;
+import org.cloudbus.cloudsim.VmSchedulerTimeShared;
+import org.cloudbus.cloudsim.core.CloudSim;
+import org.cloudbus.cloudsim.power.PowerHost;
+import org.cloudbus.cloudsim.power.models.PowerModelSpecPower_QLO;
+import org.cloudbus.cloudsim.provisioners.BwProvisionerSimple;
+import org.cloudbus.cloudsim.provisioners.PeProvisionerSimple;
+import org.cloudbus.cloudsim.provisioners.RamProvisionerSimple;
+
+/**
+ * Multi-agent Q-Learning Optimizer (QLO) for dynamic cloud task scheduling
+ * and energy-aware load balancing in CloudSim 3.0.
+ *
+ * Usage:
+ *   java -cp "lib/*:." QLO            -> Runs Dataset A (8 VMs, 70 tasks)
+ *   java -cp "lib/*:." QLO A 90       -> Runs Dataset A (8 VMs, 90 tasks)
+ *   java -cp "lib/*:." QLO B 180      -> Runs Dataset B (15 VMs, 180 tasks)
+ */
+public class QLO {
+
+    // Active workload configuration (default: Dataset A)
+    private static int vmCount = 8;
+    private static int[] vmMips = { 100, 200, 300, 400, 500, 600, 700, 800 };
+    private static int taskCount = 70;
+    private static int taskTypeCount = 5;
+    private static Integer[] taskTypeList = { 100, 200, 300, 400, 500 };
+
+    // Q-Learning hyperparameters (State 1 from thesis parameter study)
+    private static final double ALPHA = 0.1;     // Learning rate
+    private static final double GAMMA = 0.9;     // Discount factor
+    private static final double EPSILON = 0.1;   // Exploration rate
+    private static final int TRAINING_EPISODES = 1000;
+    private static final int STEPS_PER_EPISODE = 1000;
+    private static final long RANDOM_SEED = 42L;
+
+    // Energy pricing ($0.15 per kWh)
+    private static final double ENERGY_COST_PER_KWH = 0.15;
+
+    // Q-table indexed by [sourceVm * taskTypeCount + jobTypeIdx][destinationVm]
+    private static double[][] qTable;
+
+    // Comparative evaluation metrics (Optimized vs. Round-Robin Baseline)
+    private static double optimizedExecutionTime;
+    private static double nonOptimizedExecutionTime;
+    private static double optimizedResponseTime;
+    private static double nonOptimizedResponseTime;
+    private static double optimizedEnergyCost;
+    private static double nonOptimizedEnergyCost;
+    private static double optimizedEnergyConsumption;
+    private static double nonOptimizedEnergyConsumption;
+
+    public static void main(String[] args) {
+        configureDataset(args);
+        qTable = new double[vmCount * taskTypeCount][vmCount];
+
+        Log.printLine("Starting Q-Learning Optimizer (QLO) ...");
+        Log.printLine("Configuration: VMs=" + vmCount + ", Tasks=" + taskCount + ", TaskTypes=" + taskTypeCount);
+
+        Random rand = new Random(RANDOM_SEED);
+        int mipsSum = IntStream.of(vmMips).sum();
+
+        // Phase 1: Train Q-Learning scheduling policy
+        trainQTable(rand, mipsSum);
+        Log.printLine("End of Training Phase.");
+
+        // Phase 2: Evaluate trained policy against unoptimized Round-Robin baseline in CloudSim
+        runCloudSimEvaluation(rand, mipsSum);
+    }
+
+    /**
+     * Selects Dataset A (8 VMs) or Dataset B (15 VMs) and optional task count from CLI arguments.
+     */
+    private static void configureDataset(String[] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("B")) {
+            vmCount = 15;
+            vmMips = new int[] { 100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300, 320, 340, 360, 380 };
+            taskTypeCount = 12;
+            taskTypeList = new Integer[] { 100, 120, 140, 160, 180, 200, 220, 240, 260, 280, 300, 320 };
+            taskCount = 180;
+        }
+        if (args.length > 1) {
+            try {
+                int parsedTasks = Integer.parseInt(args[1]);
+                if (parsedTasks > 0) {
+                    taskCount = parsedTasks;
+                }
+            } catch (NumberFormatException ignored) {
+                Log.printLine("Invalid task count argument; using default: " + taskCount);
+            }
+        }
+    }
+
+    /**
+     * Off-policy Q-Learning training loop with epsilon-greedy exploration.
+     * Reward is defined as the reduction in total absolute load-balancing variance across VMs.
+     */
+    private static void trainQTable(Random rand, int mipsSum) {
+        long[] vmOptQueueLen = new long[vmCount];
+        long[] vmCurQueueLen = new long[vmCount];
+        long[] vmAbsVariance = new long[vmCount];
+
+        for (int episode = 0; episode < TRAINING_EPISODES; episode++) {
+            int[][] vmQueues = new int[vmCount][taskCount];
+            int totalTaskLength = generateRoundRobinWorkload(rand, vmQueues, null);
+
+            double loadBalanceCoeff = (double) totalTaskLength / mipsSum;
+            for (int vm = 0; vm < vmCount; vm++) {
+                vmOptQueueLen[vm] = Math.round(loadBalanceCoeff * vmMips[vm]);
+            }
+
+            long curTotalAbsVar = computeTotalAbsVariance(vmQueues, vmOptQueueLen, vmCurQueueLen, vmAbsVariance);
+
+            int state = selectNonEmptyVm(rand, vmQueues);
+            if (state == -1) {
+                continue;
+            }
+
+            for (int step = 0; step < STEPS_PER_EPISODE; step++) {
+                long prevTotalAbsVar = curTotalAbsVar;
+
+                int[] nonZeroIndices = collectNonZeroIndices(vmQueues[state]);
+                if (nonZeroIndices.length == 0) {
+                    state = selectNonEmptyVm(rand, vmQueues);
+                    if (state == -1) {
+                        break;
+                    }
+                    nonZeroIndices = collectNonZeroIndices(vmQueues[state]);
+                }
+
+                int chosenSlot = nonZeroIndices[rand.nextInt(nonZeroIndices.length)];
+                int selectedJob = vmQueues[state][chosenSlot];
+                int jobTypeIdx = Arrays.asList(taskTypeList).indexOf(selectedJob);
+
+                // Epsilon-greedy action selection (choose destination VM != current state)
+                int nextState;
+                if (rand.nextDouble() < EPSILON) {
+                    do {
+                        nextState = rand.nextInt(vmCount);
+                    } while (nextState == state);
+                } else {
+                    nextState = getBestActionExcluding(state, jobTypeIdx, state, rand);
+                }
+
+                // Relocate selected job from source VM (state) to destination VM (nextState)
+                vmQueues[state][chosenSlot] = 0;
+                insertIntoQueue(vmQueues[nextState], selectedJob);
+
+                curTotalAbsVar = computeTotalAbsVariance(vmQueues, vmOptQueueLen, vmCurQueueLen, vmAbsVariance);
+                long reward = prevTotalAbsVar - curTotalAbsVar;
+
+                double currentQ = getQ(state, jobTypeIdx, nextState);
+                double maxNextQ = getMaxQ(nextState, jobTypeIdx);
+                double updatedQ = currentQ + ALPHA * (reward + GAMMA * maxNextQ - currentQ);
+                setQ(state, jobTypeIdx, nextState, updatedQ);
+
+                state = nextState;
+            }
+        }
+    }
+
+    /**
+     * Generates a test workload, optimizes task placement using the learned Q-table,
+     * and benchmarks it against the unoptimized Round-Robin placement in CloudSim.
+     */
+    private static void runCloudSimEvaluation(Random rand, int mipsSum) {
+        try {
+            int[][] optimizedVmQueues = new int[vmCount][taskCount];
+            int[][] baselineVmQueues = new int[vmCount][taskCount];
+
+            int totalTaskLength = generateRoundRobinWorkload(rand, optimizedVmQueues, baselineVmQueues);
+
+            long[] vmOptQueueLen = new long[vmCount];
+            long[] vmCurQueueLen = new long[vmCount];
+            long[] vmAbsVariance = new long[vmCount];
+
+            double loadBalanceCoeff = (double) totalTaskLength / mipsSum;
+            for (int vm = 0; vm < vmCount; vm++) {
+                vmOptQueueLen[vm] = Math.round(loadBalanceCoeff * vmMips[vm]);
+            }
+
+            long curTotalAbsVar = computeTotalAbsVariance(optimizedVmQueues, vmOptQueueLen, vmCurQueueLen, vmAbsVariance);
+
+            // Apply learned Q-table policy without mutating the Q-table
+            for (int state = 0; state < vmCount; state++) {
+                for (int tt = 0; tt < taskTypeCount; tt++) {
+                    double[] qRow = qTable[(state * taskTypeCount) + tt];
+                    boolean[] visited = new boolean[vmCount];
+
+                    for (int attempt = 0; attempt < vmCount; attempt++) {
+                        int bestDestVm = -1;
+                        double bestQ = -Double.MAX_VALUE;
+                        for (int dest = 0; dest < vmCount; dest++) {
+                            if (!visited[dest] && dest != state && qRow[dest] > bestQ) {
+                                bestQ = qRow[dest];
+                                bestDestVm = dest;
+                            }
+                        }
+                        if (bestDestVm == -1) {
+                            break;
+                        }
+                        visited[bestDestVm] = true;
+
+                        for (int slot = 0; slot < optimizedVmQueues[state].length; slot++) {
+                            if (optimizedVmQueues[state][slot] == taskTypeList[tt]) {
+                                int selectedJob = optimizedVmQueues[state][slot];
+                                long newSourceAbsVar = Math.abs(vmOptQueueLen[state] - (vmCurQueueLen[state] - selectedJob));
+                                long newDestAbsVar = Math.abs(vmOptQueueLen[bestDestVm] - (vmCurQueueLen[bestDestVm] + selectedJob));
+                                long candidateTotalVar = curTotalAbsVar
+                                        - vmAbsVariance[state] + newSourceAbsVar
+                                        - vmAbsVariance[bestDestVm] + newDestAbsVar;
+
+                                if (candidateTotalVar < curTotalAbsVar) {
+                                    vmCurQueueLen[state] -= selectedJob;
+                                    vmCurQueueLen[bestDestVm] += selectedJob;
+                                    vmAbsVariance[state] = newSourceAbsVar;
+                                    vmAbsVariance[bestDestVm] = newDestAbsVar;
+                                    curTotalAbsVar = candidateTotalVar;
+
+                                    optimizedVmQueues[state][slot] = 0;
+                                    insertIntoQueue(optimizedVmQueues[bestDestVm], selectedJob);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Initialize CloudSim environment
+            int numUsers = 2;
+            Calendar calendar = Calendar.getInstance();
+            CloudSim.init(numUsers, calendar, false);
+
+            Datacenter datacenter0 = createDatacenter("Datacenter_0");
+            Host host0 = datacenter0.getHostList().get(0);
+            Host host1 = datacenter0.getHostList().get(1);
+
+            DatacenterBroker broker0 = createBroker(0);
+            DatacenterBroker broker1 = createBroker(1);
+            int brokerId0 = broker0.getId();
+            int brokerId1 = broker1.getId();
+
+            List<Vm> vmList0 = new ArrayList<>();
+            List<Vm> vmList1 = new ArrayList<>();
+            long imageSize = 10000;
+            int ram = 512;
+            long bw = 1000;
+            int pesNumber = 1;
+            String vmm = "Xen";
+
+            for (int i = 0; i < vmCount; i++) {
+                Vm optVm = new Vm(i, brokerId0, vmMips[i], pesNumber, ram, bw, imageSize, vmm, new CloudletSchedulerSpaceShared());
+                optVm.setHost(host0);
+                vmList0.add(optVm);
+
+                Vm baseVm = new Vm(i, brokerId1, vmMips[i], pesNumber, ram, bw, imageSize, vmm, new CloudletSchedulerSpaceShared());
+                baseVm.setHost(host1);
+                vmList1.add(baseVm);
+            }
+
+            broker0.submitVmList(vmList0);
+            broker1.submitVmList(vmList1);
+
+            // Create and bind Cloudlets
+            List<Cloudlet> cloudletList0 = new ArrayList<>();
+            List<Cloudlet> cloudletList1 = new ArrayList<>();
+            long fileSize = 3000;
+            long outputSize = 3000;
+            UtilizationModel utilizationModel = new UtilizationModelFull();
+
+            int cloudletId0 = 0;
+            int cloudletId1 = 1000;
+            int[][] binder0 = new int[vmCount][taskCount];
+            int[][] binder1 = new int[vmCount][taskCount];
+
+            for (int i = 0; i < vmCount; i++) {
+                for (int j = 0; j < taskCount; j++) {
+                    if (optimizedVmQueues[i][j] > 0) {
+                        Cloudlet cl = new Cloudlet(cloudletId0, optimizedVmQueues[i][j], pesNumber, fileSize, outputSize,
+                                utilizationModel, utilizationModel, utilizationModel);
+                        cl.setUserId(brokerId0);
+                        cloudletList0.add(cl);
+                        binder0[i][j] = cloudletId0++;
+                    } else {
+                        binder0[i][j] = -1;
+                    }
+
+                    if (baselineVmQueues[i][j] > 0) {
+                        Cloudlet cl = new Cloudlet(cloudletId1, baselineVmQueues[i][j], pesNumber, fileSize, outputSize,
+                                utilizationModel, utilizationModel, utilizationModel);
+                        cl.setUserId(brokerId1);
+                        cloudletList1.add(cl);
+                        binder1[i][j] = cloudletId1++;
+                    } else {
+                        binder1[i][j] = -1;
+                    }
+                }
+            }
+
+            broker0.submitCloudletList(cloudletList0);
+            broker1.submitCloudletList(cloudletList1);
+
+            for (int i = 0; i < vmCount; i++) {
+                for (int j = 0; j < taskCount; j++) {
+                    if (binder0[i][j] > -1) {
+                        broker0.bindCloudletToVm(binder0[i][j], vmList0.get(i).getId());
+                    }
+                    if (binder1[i][j] > -1) {
+                        broker1.bindCloudletToVm(binder1[i][j], vmList1.get(i).getId());
+                    }
+                }
+            }
+
+            Log.printLine("Starting CloudSim Simulation...");
+            CloudSim.startSimulation();
+
+            List<Cloudlet> receivedOpt = broker0.getCloudletReceivedList();
+            List<Cloudlet> receivedBase = broker1.getCloudletReceivedList();
+            List<PowerHost> powerHosts = datacenter0.getHostList();
+
+            CloudSim.stopSimulation();
+
+            Log.printLine("=============================================================================");
+            Log.printLine("=============> User (QLO Optimized) " + brokerId0);
+            evaluateCloudletResults(receivedOpt, powerHosts.get(0), true);
+
+            Log.printLine("=============================================================================");
+            Log.printLine("=============> User (Round-Robin Baseline) " + brokerId1);
+            evaluateCloudletResults(receivedBase, powerHosts.get(1), false);
+
+            printImprovementResults();
+            Log.printLine("QLO Simulation finished successfully.");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            Log.printLine("The simulation terminated due to an unexpected error.");
+        }
+    }
+
+    private static int generateRoundRobinWorkload(Random rand, int[][] targetQueue, int[][] mirrorQueue) {
+        int vmIdx = 0;
+        int slotIdx = 0;
+        int totalTaskLength = 0;
+
+        for (int j = 0; j < taskCount; j++) {
+            int jobType = rand.nextInt(taskTypeCount);
+            int jobLength = taskTypeList[jobType];
+            totalTaskLength += jobLength;
+
+            targetQueue[vmIdx][slotIdx] = jobLength;
+            if (mirrorQueue != null) {
+                mirrorQueue[vmIdx][slotIdx] = jobLength;
+            }
+
+            vmIdx++;
+            if (vmIdx == vmCount) {
+                vmIdx = 0;
+                slotIdx++;
+            }
+        }
+        return totalTaskLength;
+    }
+
+    private static long computeTotalAbsVariance(
+            int[][] vmQueues, long[] vmOptQueueLen, long[] vmCurQueueLen, long[] vmAbsVariance) {
+        long totalAbsVar = 0;
+        for (int vm = 0; vm < vmCount; vm++) {
+            vmCurQueueLen[vm] = IntStream.of(vmQueues[vm]).sum();
+            vmAbsVariance[vm] = Math.abs(vmOptQueueLen[vm] - vmCurQueueLen[vm]);
+            totalAbsVar += vmAbsVariance[vm];
+        }
+        return totalAbsVar;
+    }
+
+    private static int selectNonEmptyVm(Random rand, int[][] vmQueues) {
+        List<Integer> nonEmpty = new ArrayList<>();
+        for (int vm = 0; vm < vmCount; vm++) {
+            if (IntStream.of(vmQueues[vm]).sum() > 0) {
+                nonEmpty.add(vm);
+            }
+        }
+        return nonEmpty.isEmpty() ? -1 : nonEmpty.get(rand.nextInt(nonEmpty.size()));
+    }
+
+    private static int[] collectNonZeroIndices(int[] queue) {
+        int count = 0;
+        for (int job : queue) {
+            if (job != 0) {
+                count++;
+            }
+        }
+        int[] indices = new int[count];
+        int ptr = 0;
+        for (int i = 0; i < queue.length; i++) {
+            if (queue[i] != 0) {
+                indices[ptr++] = i;
+            }
+        }
+        return indices;
+    }
+
+    private static void insertIntoQueue(int[] queue, int jobLength) {
+        for (int i = 0; i < queue.length; i++) {
+            if (queue[i] == 0) {
+                queue[i] = jobLength;
+                return;
+            }
+        }
+    }
+
+    private static Datacenter createDatacenter(String name) {
+        List<Host> hostList = new ArrayList<>();
+        int hostMips = 5000;
+        int ram = 20480;
+        long storage = 1000000;
+        int bw = 100000;
+
+        // Create isolated PE lists for each PowerHost to avoid shared resource conflicts
+        for (int hostId = 0; hostId < 2; hostId++) {
+            List<Pe> peList = new ArrayList<>();
+            peList.add(new Pe(0, new PeProvisionerSimple(hostMips)));
+
+            hostList.add(
+                    new PowerHost(
+                            hostId,
+                            new RamProvisionerSimple(ram),
+                            new BwProvisionerSimple(bw),
+                            storage,
+                            peList,
+                            new VmSchedulerTimeShared(peList),
+                            new PowerModelSpecPower_QLO()
+                    )
+            );
+        }
+
+        String arch = "x86";
+        String os = "Linux";
+        String vmm = "Xen";
+        double timeZone = 10.0;
+        double cost = 3.0;
+        double costPerMem = 0.05;
+        double costPerStorage = 0.001;
+        double costPerBw = 0.0;
+        LinkedList<Storage> storageList = new LinkedList<>();
+
+        DatacenterCharacteristics characteristics = new DatacenterCharacteristics(
+                arch, os, vmm, hostList, timeZone, cost, costPerMem, costPerStorage, costPerBw);
+
+        try {
+            return new Datacenter(name, characteristics, new VmAllocationPolicySimple(hostList), storageList, 0);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    private static DatacenterBroker createBroker(int id) {
+        try {
+            return new DatacenterBroker("Broker" + id);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
+    /**
+     * Logs Cloudlet execution results and computes makespan, average response time,
+     * host energy consumption (kWh), and operational energy cost ($).
+     */
+    private static void evaluateCloudletResults(List<Cloudlet> list, PowerHost host, boolean isOptimized) {
+        int size = list.size();
+        String indent = "    ";
+        DecimalFormat dft = new DecimalFormat("###.##");
+
+        Log.printLine();
+        Log.printLine("========== OUTPUT ==========");
+        Log.printLine("Cloudlet ID" + indent + "STATUS" + indent +
+                "Data center ID" + indent + "VM ID" + indent + "Time" + indent +
+                "Start Time" + indent + "Finish Time" + indent + "Cost" + indent + "Response Time");
+
+        double maxFinishTime = 0.0;
+        double totalResponseTime = 0.0;
+
+        for (Cloudlet cloudlet : list) {
+            Log.print(indent + cloudlet.getCloudletId() + indent + indent);
+            if (cloudlet.getCloudletStatus() == Cloudlet.SUCCESS) {
+                Log.print("SUCCESS");
+
+                double costPerSecond = 0.01;
+                double costPerRam = 0.001;
+                double costPerBw = 0.0001;
+                double cost = (cloudlet.getActualCPUTime() * costPerSecond)
+                        + (cloudlet.getUtilizationOfRam(cloudlet.getActualCPUTime()) * (costPerRam * cloudlet.getCloudletLength()))
+                        + (cloudlet.getUtilizationOfBw(cloudlet.getCloudletLength() / 1000) * costPerBw);
+
+                double responseTime = cloudlet.getFinishTime() - cloudlet.getExecStartTime();
+                totalResponseTime += responseTime;
+
+                Log.printLine(indent + indent + cloudlet.getResourceId() + indent + indent + indent + cloudlet.getVmId()
+                        + indent + indent + dft.format(cloudlet.getActualCPUTime())
+                        + indent + indent + dft.format(cloudlet.getExecStartTime())
+                        + indent + indent + dft.format(cloudlet.getFinishTime())
+                        + indent + indent + dft.format(cost)
+                        + indent + indent + dft.format(responseTime));
+
+                if (cloudlet.getFinishTime() > maxFinishTime) {
+                    maxFinishTime = cloudlet.getFinishTime();
+                }
+            }
+        }
+
+        // Compute discrete-time host power profile and cumulative energy consumption
+        int timeLength = (int) Math.ceil(maxFinishTime * 100) + 1;
+        double[][] timeTable = new double[vmCount][timeLength];
+        for (Cloudlet cl : list) {
+            int startSlot = Math.max(0, (int) Math.round(cl.getExecStartTime() * 100));
+            int endSlot = Math.min(timeLength, (int) Math.round(cl.getFinishTime() * 100));
+            for (int t = startSlot; t < endSlot; t++) {
+                timeTable[cl.getVmId()][t] = vmMips[cl.getVmId()];
+            }
+        }
+
+        double totalMips = IntStream.of(vmMips).sum();
+        double hostPower = 0.0;
+        for (int t = 0; t < timeLength; t++) {
+            double utilSum = 0.0;
+            for (int vm = 0; vm < vmCount; vm++) {
+                utilSum += timeTable[vm][t];
+            }
+            double utilization = Math.min(1.0, utilSum / totalMips);
+            hostPower += host.getPowerModel().getPower(utilization);
+        }
+
+        double hostEnergyCost = hostPower * ENERGY_COST_PER_KWH;
+
+        Log.printLine("=============================================================");
+        Log.printLine("Host " + host.getId() + " Energy Consumption: " + dft.format(hostPower) + " kWh");
+        Log.printLine("Host " + host.getId() + " Energy Cost: $" + dft.format(hostEnergyCost));
+        Log.printLine("=============================================================");
+
+        double avgResponseTime = (size > 0) ? (totalResponseTime / size) : 0.0;
+        if (isOptimized) {
+            optimizedExecutionTime = maxFinishTime;
+            optimizedResponseTime = avgResponseTime;
+            optimizedEnergyCost = hostEnergyCost;
+            optimizedEnergyConsumption = hostPower;
+        } else {
+            nonOptimizedExecutionTime = maxFinishTime;
+            nonOptimizedResponseTime = avgResponseTime;
+            nonOptimizedEnergyCost = hostEnergyCost;
+            nonOptimizedEnergyConsumption = hostPower;
+        }
+    }
+
+    private static int getBestActionExcluding(int state, int jobTypeIdx, int excludedVm, Random rand) {
+        double maxQ = Double.NEGATIVE_INFINITY;
+        List<Integer> bestActions = new ArrayList<>();
+        double[] row = qTable[(state * taskTypeCount) + jobTypeIdx];
+
+        for (int vm = 0; vm < vmCount; vm++) {
+            if (vm == excludedVm) {
+                continue;
+            }
+            if (row[vm] > maxQ) {
+                maxQ = row[vm];
+                bestActions.clear();
+                bestActions.add(vm);
+            } else if (row[vm] == maxQ) {
+                bestActions.add(vm);
+            }
+        }
+        return bestActions.get(rand.nextInt(bestActions.size()));
+    }
+
+    private static double getMaxQ(int state, int jobTypeIdx) {
+        double maxValue = Double.NEGATIVE_INFINITY;
+        double[] row = qTable[(state * taskTypeCount) + jobTypeIdx];
+        for (int i = 0; i < vmCount; i++) {
+            if (row[i] > maxValue) {
+                maxValue = row[i];
+            }
+        }
+        return maxValue;
+    }
+
+    private static double getQ(int state, int jobTypeIdx, int nextState) {
+        return qTable[(state * taskTypeCount) + jobTypeIdx][nextState];
+    }
+
+    private static void setQ(int state, int jobTypeIdx, int nextState, double value) {
+        qTable[(state * taskTypeCount) + jobTypeIdx][nextState] = value;
+    }
+
+    private static double computePercentImprovement(double baseline, double optimized) {
+        return (baseline > 0.0) ? ((baseline - optimized) / baseline) * 100.0 : 0.0;
+    }
+
+    private static void printImprovementResults() {
+        DecimalFormat dft = new DecimalFormat("###.##");
+
+        double executionTimeImp = computePercentImprovement(nonOptimizedExecutionTime, optimizedExecutionTime);
+        double responseTimeImp = computePercentImprovement(nonOptimizedResponseTime, optimizedResponseTime);
+        double energyImp = computePercentImprovement(nonOptimizedEnergyConsumption, optimizedEnergyConsumption);
+        double energyCostImp = computePercentImprovement(nonOptimizedEnergyCost, optimizedEnergyCost);
+
+        Log.printLine("=============================================================");
+        Log.printLine("Comparative Improvement Summary (QLO vs. Round-Robin):");
+        Log.printLine("Execution Time (Optimized)     : " + dft.format(optimizedExecutionTime) + " s");
+        Log.printLine("Execution Time (Baseline)      : " + dft.format(nonOptimizedExecutionTime) + " s");
+        Log.printLine("Execution Time Improvement     : " + dft.format(executionTimeImp) + "%");
+        Log.printLine("Avg Response Time (Optimized)  : " + dft.format(optimizedResponseTime) + " s");
+        Log.printLine("Avg Response Time (Baseline)   : " + dft.format(nonOptimizedResponseTime) + " s");
+        Log.printLine("Avg Response Time Improvement  : " + dft.format(responseTimeImp) + "%");
+        Log.printLine("Energy Consumption (Optimized) : " + dft.format(optimizedEnergyConsumption) + " kWh");
+        Log.printLine("Energy Consumption (Baseline)  : " + dft.format(nonOptimizedEnergyConsumption) + " kWh");
+        Log.printLine("Energy Consumption Improvement : " + dft.format(energyImp) + "%");
+        Log.printLine("Energy Cost (Optimized)        : $" + dft.format(optimizedEnergyCost));
+        Log.printLine("Energy Cost (Baseline)         : $" + dft.format(nonOptimizedEnergyCost));
+        Log.printLine("Energy Cost Improvement        : " + dft.format(energyCostImp) + "%");
+        Log.printLine("=============================================================");
+    }
+}
